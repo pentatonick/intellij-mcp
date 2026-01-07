@@ -20,6 +20,7 @@ Expose JetBrains IDE code analysis capabilities via [MCP (Model Context Protocol
 | PHP | ✅ Supported | `.php`, `.phtml` |
 | Java | ✅ Supported | `.java` |
 | Kotlin | ✅ Supported | `.kt`, `.kts` |
+| Rust | ✅ Supported | `.rs` |
 | Swift | ✅ Supported | `.swift` |
 
 ## Requirements
@@ -31,6 +32,7 @@ Expose JetBrains IDE code analysis capabilities via [MCP (Model Context Protocol
 - For PHP support: PHP plugin installed (bundled in PhpStorm, available in IntelliJ IDEA Ultimate)
 - For Java support: Java plugin installed (bundled in IntelliJ IDEA)
 - For Kotlin support: Kotlin plugin installed (bundled in IntelliJ IDEA)
+- For Rust support: Rust plugin installed (bundled in RustRover, available in IntelliJ IDEA Ultimate/CLion)
 - For Swift support: **macOS only** - requires Xcode or Swift toolchain with SourceKit-LSP
 
 ## Installation
@@ -176,6 +178,9 @@ Swift support uses [SourceKit-LSP](https://github.com/swiftlang/sourcekit-lsp) f
 
 # WebStorm (for JavaScript/TypeScript/Vue.js testing)
 ./gradlew :core:runWebStorm
+
+# RustRover (for Rust testing)
+./gradlew :core:runRustRover
 ```
 
 ## License

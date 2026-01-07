@@ -23,6 +23,8 @@ dependencies {
         plugin("PythonCore:253.29346.138")
         // PHP plugin from marketplace
         plugin("com.jetbrains.php:253.29346.138")
+        // Rust plugin from marketplace (RustRover features for IntelliJ IDEA)
+        plugin("com.jetbrains.rust:253.29346.139")
 
         pluginVerifier()
         zipSigner()
@@ -94,6 +96,7 @@ intellijPlatform {
                 <li>PHP (requires PHP plugin)</li>
                 <li>Java (requires Java plugin)</li>
                 <li>Kotlin (requires Kotlin plugin)</li>
+                <li>Rust (requires Rust plugin)</li>
                 <li>Swift (macOS only, requires Xcode or Swift toolchain)</li>
             </ul>
 
@@ -111,6 +114,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h3>1.4.0</h3>
+            <ul>
+                <li><b>New:</b> Rust language support - find symbols, references, and file structure in Rust code</li>
+                <li>Requires Rust plugin (RustRover features for IntelliJ IDEA/CLion)</li>
+            </ul>
+
             <h3>1.3.0</h3>
             <ul>
                 <li><b>New:</b> Swift language support (macOS only) - uses SourceKit-LSP for code analysis</li>
@@ -158,6 +167,12 @@ intellijPlatformTesting {
         // Run with PhpStorm (for PHP testing)
         register("runPhpStorm") {
             type = IntelliJPlatformType.PhpStorm
+            version = "2025.3.1"
+        }
+
+        // Run with RustRover (for Rust testing)
+        register("runRustRover") {
+            type = IntelliJPlatformType.RustRover
             version = "2025.3.1"
         }
     }
