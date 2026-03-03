@@ -22,6 +22,7 @@ Expose JetBrains IDE code analysis capabilities via [MCP (Model Context Protocol
 | Kotlin | ✅ Supported | `.kt`, `.kts` |
 | Rust | ✅ Supported | `.rs` |
 | Swift | ✅ Supported | `.swift` |
+| C# | ✅ Supported | `.cs` |
 
 ## Requirements
 
@@ -34,6 +35,7 @@ Expose JetBrains IDE code analysis capabilities via [MCP (Model Context Protocol
 - For Kotlin support: Kotlin plugin installed (bundled in IntelliJ IDEA)
 - For Rust support: Rust plugin installed (bundled in RustRover, available in IntelliJ IDEA Ultimate/CLion)
 - For Swift support: **macOS only** - requires Xcode or Swift toolchain with SourceKit-LSP
+- For C# support: requires [csharp-ls](https://github.com/razzmatazz/csharp-language-server) or [OmniSharp](https://github.com/OmniSharp/omnisharp-roslyn)
 
 ## Installation
 
@@ -155,6 +157,35 @@ Swift support uses [SourceKit-LSP](https://github.com/swiftlang/sourcekit-lsp) f
 - Project must be built for best `find_references` results
 - `find_symbol` requires a non-empty search query
 
+## C# Support
+
+C# support uses an external LSP server ([csharp-ls](https://github.com/razzmatazz/csharp-language-server) or [OmniSharp](https://github.com/OmniSharp/omnisharp-roslyn)) for code analysis.
+
+### Prerequisites
+
+Install csharp-ls (recommended):
+```bash
+dotnet tool install --global csharp-ls
+```
+
+### Supported Project Types
+
+- **SDK-style projects only** (.NET Core / .NET 5+)
+- **Solution files** (`.sln`) - Best support
+- **Project files** (`.csproj`) - Single project support
+- Legacy .NET Framework projects (old-style `.csproj` with `ToolsVersion`) are **not supported**
+
+### Important Notes
+
+- **First-time indexing**: When opening a C# project for the first time, the LSP server needs to index the project. This may take 10-30 seconds depending on project size.
+- **Build your project first**: Run `dotnet build` before using code analysis for best results.
+
+### Compared to Swift Support
+
+- `get_type_hierarchy` **is supported** for C# (unlike Swift)
+- Cross-platform support (Windows, macOS, Linux)
+
+
 ## Development
 
 ```bash
@@ -181,6 +212,9 @@ Swift support uses [SourceKit-LSP](https://github.com/swiftlang/sourcekit-lsp) f
 
 # RustRover (for Rust testing)
 ./gradlew :core:runRustRover
+
+# Rider (for C# testing)
+./gradlew :core:runRider
 ```
 
 ## License

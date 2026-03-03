@@ -32,7 +32,6 @@ class McpToolExecutor {
         projectPath: String?
     ): List<SymbolInfo> {
         val project = projectResolver.resolve(projectPath)
-        checkIndexReady(project)
 
         val symbolKind = kind?.let { parseSymbolKind(it) }
 
@@ -48,11 +47,14 @@ class McpToolExecutor {
             )
         }
 
-        return ReadAction.compute<List<SymbolInfo>, Exception> {
-            adapters.flatMap { adapter ->
+        return adapters.flatMap { adapter ->
+            if (adapter.requiresReadAction && DumbService.getInstance(project).isDumb) {
+                return@flatMap emptyList()
+            }
+            withReadActionIf(adapter.requiresReadAction) {
                 adapter.findSymbol(project, name, symbolKind)
-            }.map { it.toOneBased() }  // Convert to 1-based
-        }
+            }
+        }.map { it.toOneBased() }
     }
 
     fun findReferences(
@@ -62,21 +64,22 @@ class McpToolExecutor {
         projectPath: String?
     ): List<LocationInfo> {
         val project = projectResolver.resolve(projectPath)
-        checkIndexReady(project)
 
         val adapter = getAdapterForFile(filePath)
+        if (adapter.requiresReadAction) checkIndexReady(project)
 
         // Convert from 1-based (MCP API) to 0-based (internal)
         val line0 = line - 1
         val column0 = column - 1
 
-        return ReadAction.compute<List<LocationInfo>, Exception> {
-            val offset = adapter.getOffset(project, filePath, line0, column0)
-                ?: throw InvalidPositionException("Invalid position: $filePath:$line:$column")
+        // getOffset always needs ReadAction (PSI operation)
+        val offset = ReadAction.compute<Int?, Exception> {
+            adapter.getOffset(project, filePath, line0, column0)
+        } ?: throw InvalidPositionException("Invalid position: $filePath:$line:$column")
 
+        return withReadActionIf(adapter.requiresReadAction) {
             adapter.findReferences(project, filePath, offset)
-                .map { it.toOneBased() }  // Convert back to 1-based
-        }
+        }.map { it.toOneBased() }
     }
 
     fun getSymbolInfo(
@@ -86,22 +89,23 @@ class McpToolExecutor {
         projectPath: String?
     ): SymbolInfo {
         val project = projectResolver.resolve(projectPath)
-        checkIndexReady(project)
 
         val adapter = getAdapterForFile(filePath)
+        if (adapter.requiresReadAction) checkIndexReady(project)
 
         // Convert from 1-based (MCP API) to 0-based (internal)
         val line0 = line - 1
         val column0 = column - 1
 
-        return ReadAction.compute<SymbolInfo, Exception> {
-            val offset = adapter.getOffset(project, filePath, line0, column0)
-                ?: throw InvalidPositionException("Invalid position: $filePath:$line:$column")
+        // getOffset always needs ReadAction (PSI operation)
+        val offset = ReadAction.compute<Int?, Exception> {
+            adapter.getOffset(project, filePath, line0, column0)
+        } ?: throw InvalidPositionException("Invalid position: $filePath:$line:$column")
 
-            (adapter.getSymbolInfo(project, filePath, offset)
-                ?: throw SymbolNotFoundException("No symbol found at $filePath:$line:$column"))
-                .toOneBased()  // Convert back to 1-based
-        }
+        return (withReadActionIf(adapter.requiresReadAction) {
+            adapter.getSymbolInfo(project, filePath, offset)
+        } ?: throw SymbolNotFoundException("No symbol found at $filePath:$line:$column"))
+            .toOneBased()
     }
 
     fun getFileSymbols(
@@ -109,14 +113,13 @@ class McpToolExecutor {
         projectPath: String?
     ): FileSymbols {
         val project = projectResolver.resolve(projectPath)
-        checkIndexReady(project)
 
         val adapter = getAdapterForFile(filePath)
+        if (adapter.requiresReadAction) checkIndexReady(project)
 
-        return ReadAction.compute<FileSymbols, Exception> {
+        return withReadActionIf(adapter.requiresReadAction) {
             adapter.getFileSymbols(project, filePath)
-                .toOneBased()  // Convert to 1-based
-        }
+        }.toOneBased()
     }
 
     fun getTypeHierarchy(
@@ -125,7 +128,6 @@ class McpToolExecutor {
         projectPath: String?
     ): TypeHierarchy {
         val project = projectResolver.resolve(projectPath)
-        checkIndexReady(project)
 
         val adapters = if (language != null) {
             listOfNotNull(registry.getAdapterByLanguage(language))
@@ -133,11 +135,26 @@ class McpToolExecutor {
             registry.getAllAdapters()
         }
 
-        return ReadAction.compute<TypeHierarchy, Exception> {
-            (adapters.firstNotNullOfOrNull { adapter ->
+        return (adapters.firstNotNullOfOrNull { adapter ->
+            if (adapter.requiresReadAction && DumbService.getInstance(project).isDumb) {
+                return@firstNotNullOfOrNull null
+            }
+            withReadActionIf(adapter.requiresReadAction) {
                 adapter.getTypeHierarchy(project, typeName)
-            } ?: throw SymbolNotFoundException("Type not found: $typeName"))
-                .toOneBased()  // Convert to 1-based
+            }
+        } ?: throw SymbolNotFoundException("Type not found: $typeName"))
+            .toOneBased()
+    }
+
+    /**
+     * Conditionally wrap a block in ReadAction.
+     * PSI-based adapters need ReadAction; LSP-based adapters don't.
+     */
+    private fun <T> withReadActionIf(needed: Boolean, block: () -> T): T {
+        return if (needed) {
+            ReadAction.compute<T, Exception> { block() }
+        } else {
+            block()
         }
     }
 

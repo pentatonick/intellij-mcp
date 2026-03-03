@@ -18,6 +18,13 @@ interface LanguageAdapter {
     }
 
     /**
+     * Whether this adapter's methods need to run inside ReadAction.
+     * PSI-based adapters need ReadAction; LSP-based adapters don't
+     * (they only need ReadAction for getOffset, which is handled separately).
+     */
+    val requiresReadAction: Boolean get() = true
+
+    /**
      * Language identifier (e.g., "python", "java", "kotlin")
      */
     val languageId: String

@@ -1,4 +1,4 @@
-package info.jiayun.intellijmcp.swift
+package info.jiayun.intellijmcp.csharp
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -9,56 +9,61 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import info.jiayun.intellijmcp.api.*
 import org.eclipse.lsp4j.DocumentSymbol
-import org.eclipse.lsp4j.Hover
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.WorkspaceSymbol
-import org.eclipse.lsp4j.jsonrpc.messages.Either
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import org.eclipse.lsp4j.SymbolKind as LspSymbolKind
 
 /**
- * Swift language adapter using SourceKit-LSP
+ * C# language adapter using LSP (csharp-ls or OmniSharp)
  *
- * Unlike other language adapters that use PSI, this adapter communicates with
- * SourceKit-LSP via the Language Server Protocol.
+ * Unlike PSI-based adapters, this communicates with an external C# Language Server.
+ *
+ * IMPORTANT: All line/column values returned are 0-based.
+ * McpToolExecutor.toOneBased() handles the conversion to 1-based for the MCP API.
  */
-class SwiftLanguageAdapter : LanguageAdapter {
+class CSharpLanguageAdapter : LanguageAdapter {
 
-    private val logger = Logger.getInstance(SwiftLanguageAdapter::class.java)
+    private val logger = Logger.getInstance(CSharpLanguageAdapter::class.java)
 
     override val requiresReadAction = false
-    override val languageId = "swift"
-    override val languageDisplayName = "Swift"
-    override val supportedExtensions = setOf("swift")
+    override val languageId = "csharp"
+    override val languageDisplayName = "C#"
+    override val supportedExtensions = setOf("cs")
 
-    // Cache of LSP clients per project (by project base path)
-    private val clients = ConcurrentHashMap<String, SwiftLspClient>()
+    private val clients = ConcurrentHashMap<String, CSharpLspClient>()
 
     companion object {
         private const val LSP_TIMEOUT_SECONDS = 30L
+        private val isWindows = System.getProperty("os.name")?.lowercase()?.contains("win") == true
+
+        fun uriToPathStatic(uri: String): String {
+            val path = uri.removePrefix("file://")
+            return if (isWindows && path.length >= 3 && path[0] == '/' && path[2] == ':') {
+                path.substring(1)
+            } else {
+                path
+            }
+        }
     }
 
     override fun supports(file: VirtualFile): Boolean {
-        // Only support Swift files on macOS with SourceKit-LSP available
-        if (!SwiftLspClient.isAvailable()) return false
+        if (!CSharpLspClient.isAvailable()) return false
         return super.supports(file)
     }
 
     override fun supports(file: PsiFile): Boolean {
-        if (!SwiftLspClient.isAvailable()) return false
+        if (!CSharpLspClient.isAvailable()) return false
         return super.supports(file)
     }
 
-    private fun getClient(project: Project): SwiftLspClient {
+    private fun getClient(project: Project): CSharpLspClient {
         val key = project.basePath
             ?: throw IllegalStateException("Project has no base path")
-
-        return clients.computeIfAbsent(key) {
-            SwiftLspClient(project)
-        }
+        return clients.computeIfAbsent(key) { CSharpLspClient(project) }
     }
 
     // ===== Find Symbol =====
@@ -67,41 +72,61 @@ class SwiftLanguageAdapter : LanguageAdapter {
         name: String,
         kind: SymbolKind?
     ): List<SymbolInfo> {
-        if (!SwiftLspClient.isAvailable()) return emptyList()
+        if (!CSharpLspClient.isAvailable()) {
+            logger.info("C# find_symbol skipped: csharp-ls/OmniSharp not found in PATH or ~/.dotnet/tools")
+            return emptyList()
+        }
         if (name.isBlank()) return emptyList()
-
-        // Only start LSP for projects that have Swift files
-        if (!hasSwiftFiles(project)) return emptyList()
+        if (!hasCSharpFiles(project)) {
+            logger.info("C# find_symbol skipped: no .cs/.csproj/.sln files found in ${project.basePath}")
+            return emptyList()
+        }
 
         val client = getClient(project)
+        val retryInterval = 3000L
 
-        // Retry logic: always retry at least once if empty, more if recently initialized
-        val maxRetries = if (client.isRecentlyInitialized()) 5 else 2
-        val retryInterval = 3000L  // 3 seconds between retries
+        // maxRetries is determined inside the loop because isRecentlyInitialized()
+        // may change after the first call triggers ensureInitialized()
+        var maxRetries = 3
+        for (attempt in 1..10) { // hard cap
+            if (attempt > maxRetries) break
 
-        for (attempt in 1..maxRetries) {
             try {
                 val result = client.workspaceSymbol(name)
                     .get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
+                // Re-evaluate after workspaceSymbol() (which calls ensureInitialized())
+                val recentlyInitialized = client.isRecentlyInitialized()
+                if (attempt == 1 && recentlyInitialized) {
+                    maxRetries = 10
+                }
+
                 val symbols: List<SymbolInfo> = when {
-                    result.isLeft -> result.left.map { info: SymbolInformation -> symbolInfoToSymbolInfo(info) }
-                    result.isRight -> result.right.map { ws: WorkspaceSymbol -> workspaceSymbolToSymbolInfo(ws) }
+                    result.isLeft -> result.left.map { symbolInfoFromLsp(it) }
+                    result.isRight -> result.right.map { workspaceSymbolToSymbolInfo(it, client) }
                     else -> emptyList()
                 }
 
                 val filtered = symbols.filter { symbol ->
                     symbol.name.contains(name, ignoreCase = true) &&
-                            (kind == null || symbol.kind == kind)
+                        (kind == null || symbol.kind == kind)
                 }
 
-                if (filtered.isNotEmpty()) {
-                    return filtered
+                logger.debug("C# find_symbol '$name' attempt $attempt/$maxRetries: ${filtered.size} matches (${symbols.size} total from LSP)")
+
+                if (filtered.isNotEmpty()) return filtered
+
+                // If the LSP server reported errors (e.g. MSBuild failure), stop retrying
+                val serverErrors = client.getServerErrors()
+                if (serverErrors.isNotEmpty()) {
+                    logger.warn("C# LSP server reported errors — symbol lookup will not work:\n" +
+                        serverErrors.joinToString("\n") + "\n" +
+                        "Possible fix: upgrade csharp-ls (dotnet tool update -g csharp-ls) or use a compatible .NET SDK version.")
+                    return emptyList()
                 }
 
-                // If still in initialization period and not the last attempt, wait and retry
-                if (attempt < maxRetries && client.isRecentlyInitialized()) {
-                    logger.info("Swift find_symbol returned empty, retrying... ($attempt/$maxRetries)")
+                if (attempt < maxRetries && recentlyInitialized) {
+                    logger.info("C# find_symbol returned empty, retrying... ($attempt/$maxRetries)")
                     Thread.sleep(retryInterval)
                 }
             } catch (e: Exception) {
@@ -110,22 +135,17 @@ class SwiftLanguageAdapter : LanguageAdapter {
             }
         }
 
-        // Log hint if still empty after retries and recently initialized
         if (client.isRecentlyInitialized()) {
-            logger.info("Swift find_symbol returned empty after retries. LSP may still be indexing.")
+            logger.info("C# find_symbol returned empty after $maxRetries retries. LSP may still be indexing.")
         }
-
         return emptyList()
     }
 
-    /**
-     * Check if project contains Swift files
-     */
-    private fun hasSwiftFiles(project: Project): Boolean {
+    private fun hasCSharpFiles(project: Project): Boolean {
         val basePath = project.basePath ?: return false
         return File(basePath).walkTopDown()
             .take(500)
-            .any { it.isFile && it.extension == "swift" }
+            .any { it.isFile && (it.extension == "cs" || it.extension == "csproj" || it.extension == "sln") }
     }
 
     // ===== Find References =====
@@ -134,7 +154,7 @@ class SwiftLanguageAdapter : LanguageAdapter {
         filePath: String,
         offset: Int
     ): List<LocationInfo> {
-        if (!SwiftLspClient.isAvailable()) return emptyList()
+        if (!CSharpLspClient.isAvailable()) return emptyList()
 
         val client = getClient(project)
         val (line, column) = offsetToLineColumn(project, filePath, offset)
@@ -143,8 +163,7 @@ class SwiftLanguageAdapter : LanguageAdapter {
         return try {
             val locations = client.references(filePath, line, column)
                 .get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-
-            locations.map { locationToLocationInfo(it) }
+            locations.map { locationToLocationInfo(it, client) }
         } catch (e: Exception) {
             logger.warn("Failed to find references at $filePath:$offset", e)
             throw IllegalArgumentException("Failed to find references: ${e.message}", e)
@@ -157,14 +176,13 @@ class SwiftLanguageAdapter : LanguageAdapter {
         filePath: String,
         offset: Int
     ): SymbolInfo? {
-        if (!SwiftLspClient.isAvailable()) return null
+        if (!CSharpLspClient.isAvailable()) return null
 
         val client = getClient(project)
         val (line, column) = offsetToLineColumn(project, filePath, offset)
             ?: return null
 
         return try {
-            // Use hover for documentation and definition for location
             val hoverFuture = client.hover(filePath, line, column)
             val definitionFuture = client.definition(filePath, line, column)
 
@@ -181,16 +199,9 @@ class SwiftLanguageAdapter : LanguageAdapter {
 
             if (hover == null && definitions.isEmpty()) return null
 
-            // Extract documentation from hover
             val documentation = extractDocumentation(hover)
-
-            // Get location from definition
-            val location = definitions.firstOrNull()?.let { locationToLocationInfo(it) }
-
-            // Extract symbol name from hover content or file
+            val location = definitions.firstOrNull()?.let { locationToLocationInfo(it, client) }
             val symbolName = extractSymbolName(documentation, project, filePath, offset) ?: "unknown"
-
-            // Try to infer symbol kind from documentation
             val symbolKind = inferSymbolKind(documentation)
 
             SymbolInfo(
@@ -212,12 +223,8 @@ class SwiftLanguageAdapter : LanguageAdapter {
         project: Project,
         filePath: String
     ): FileSymbols {
-        if (!SwiftLspClient.isAvailable()) {
-            return FileSymbols(
-                filePath = filePath,
-                language = languageId,
-                symbols = emptyList()
-            )
+        if (!CSharpLspClient.isAvailable()) {
+            return FileSymbols(filePath = filePath, language = languageId, symbols = emptyList())
         }
 
         val client = getClient(project)
@@ -226,10 +233,11 @@ class SwiftLanguageAdapter : LanguageAdapter {
             val result = client.documentSymbol(filePath)
                 .get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
-            val symbols = result.mapNotNull { either ->
+            val symbols = (result ?: emptyList()).mapNotNull { either ->
                 when {
+                    either == null -> null
                     either.isRight -> convertDocumentSymbol(either.right, filePath)
-                    either.isLeft -> convertSymbolInformation(either.left, filePath)
+                    either.isLeft -> convertSymbolInformation(either.left, client)
                     else -> null
                 }
             }
@@ -237,8 +245,8 @@ class SwiftLanguageAdapter : LanguageAdapter {
             FileSymbols(
                 filePath = filePath,
                 language = languageId,
-                moduleName = extractModuleName(filePath),
-                imports = emptyList(), // LSP doesn't provide import info directly
+                moduleName = File(filePath).nameWithoutExtension,
+                imports = emptyList(),
                 symbols = symbols
             )
         } catch (e: Exception) {
@@ -252,10 +260,115 @@ class SwiftLanguageAdapter : LanguageAdapter {
         project: Project,
         typeName: String
     ): TypeHierarchy? {
-        // SourceKit-LSP doesn't fully support LSP 3.17 type hierarchy yet
-        // Return null to indicate this feature is not available
-        logger.info("Type hierarchy not supported for Swift (SourceKit-LSP limitation)")
-        return null
+        if (!CSharpLspClient.isAvailable()) return null
+
+        val client = getClient(project)
+
+        // Step 1: Find the type via workspace/symbol
+        val symbolResult = try {
+            client.workspaceSymbol(typeName).get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            logger.warn("Failed to search for type: $typeName", e)
+            return null
+        }
+
+        // Find a class/interface/struct matching the name
+        val targetLocation = findTypeLocation(symbolResult, typeName, client) ?: return null
+
+        // Step 2: Prepare type hierarchy at the symbol's location
+        val items = try {
+            client.prepareTypeHierarchy(
+                targetLocation.filePath,
+                targetLocation.line,
+                targetLocation.column
+            ).get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            logger.warn("Type hierarchy not supported by C# LSP server", e)
+            return null
+        }
+
+        val item = items?.firstOrNull() ?: return null
+
+        // Step 3: Get supertypes and subtypes
+        val superTypes = try {
+            client.supertypes(item).get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            logger.debug("Failed to get supertypes for $typeName", e)
+            null
+        }
+
+        val subTypes = try {
+            client.subtypes(item).get(LSP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            logger.debug("Failed to get subtypes for $typeName", e)
+            null
+        }
+
+        return TypeHierarchy(
+            typeName = item.name,
+            qualifiedName = item.detail,
+            kind = mapLspSymbolKind(item.kind),
+            superTypes = superTypes?.map { typeHierarchyItemToTypeRef(it, client) } ?: emptyList(),
+            subTypes = subTypes?.map { typeHierarchyItemToTypeRef(it, client) } ?: emptyList()
+        )
+    }
+
+    private fun findTypeLocation(
+        result: org.eclipse.lsp4j.jsonrpc.messages.Either<List<SymbolInformation>, List<WorkspaceSymbol>>,
+        typeName: String,
+        client: CSharpLspClient
+    ): LocationInfo? {
+        val typeKinds = setOf(
+            LspSymbolKind.Class, LspSymbolKind.Interface, LspSymbolKind.Struct, LspSymbolKind.Enum
+        )
+
+        when {
+            result.isLeft -> {
+                val match = result.left
+                    .filter { it.kind in typeKinds }
+                    .find { it.name.equals(typeName, ignoreCase = true) }
+                    ?: result.left
+                        .filter { it.kind in typeKinds }
+                        .find { it.name.contains(typeName, ignoreCase = true) }
+                    ?: return null
+                return locationToLocationInfo(match.location, client)
+            }
+            result.isRight -> {
+                val match = result.right
+                    .filter { it.kind in typeKinds }
+                    .find { it.name.equals(typeName, ignoreCase = true) }
+                    ?: result.right
+                        .filter { it.kind in typeKinds }
+                        .find { it.name.contains(typeName, ignoreCase = true) }
+                    ?: return null
+
+                return when {
+                    match.location.isLeft -> locationToLocationInfo(match.location.left, client)
+                    match.location.isRight -> {
+                        val wsLoc = match.location.right
+                        val filePath = client.uriToPath(wsLoc.uri)
+                        LocationInfo(filePath = filePath, line = 0, column = 0)
+                    }
+                    else -> null
+                }
+            }
+            else -> return null
+        }
+    }
+
+    private fun typeHierarchyItemToTypeRef(item: org.eclipse.lsp4j.TypeHierarchyItem, client: CSharpLspClient): TypeRef {
+        val filePath = client.uriToPath(item.uri)
+        return TypeRef(
+            name = item.name,
+            qualifiedName = item.detail,
+            location = LocationInfo(
+                filePath = filePath,
+                line = item.range.start.line,       // 0-based
+                column = item.range.start.character, // 0-based
+                endLine = item.range.end.line,
+                endColumn = item.range.end.character
+            )
+        )
     }
 
     // ===== Get Offset =====
@@ -265,12 +378,9 @@ class SwiftLanguageAdapter : LanguageAdapter {
         line: Int,    // 0-based (McpToolExecutor already converts from 1-based)
         column: Int   // 0-based
     ): Int? {
-        val virtualFile = LocalFileSystem.getInstance().findFileByPath(filePath)
-            ?: return null
-        val psiFile = PsiManager.getInstance(project).findFile(virtualFile)
-            ?: return null
-        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile)
-            ?: return null
+        val virtualFile = LocalFileSystem.getInstance().findFileByPath(filePath) ?: return null
+        val psiFile = PsiManager.getInstance(project).findFile(virtualFile) ?: return null
+        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return null
 
         if (line < 0 || line >= document.lineCount) return null
 
@@ -283,16 +393,10 @@ class SwiftLanguageAdapter : LanguageAdapter {
 
     // ===== Helper Methods =====
 
-    /**
-     * Convert offset to 0-based line and column for LSP
-     */
     private fun offsetToLineColumn(project: Project, filePath: String, offset: Int): Pair<Int, Int>? {
-        val virtualFile = LocalFileSystem.getInstance().findFileByPath(filePath)
-            ?: return null
-        val psiFile = PsiManager.getInstance(project).findFile(virtualFile)
-            ?: return null
-        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile)
-            ?: return null
+        val virtualFile = LocalFileSystem.getInstance().findFileByPath(filePath) ?: return null
+        val psiFile = PsiManager.getInstance(project).findFile(virtualFile) ?: return null
+        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return null
 
         if (offset < 0 || offset > document.textLength) return null
 
@@ -301,9 +405,6 @@ class SwiftLanguageAdapter : LanguageAdapter {
         return Pair(line, column) // 0-based for LSP
     }
 
-    /**
-     * Map LSP SymbolKind to our SymbolKind
-     */
     private fun mapLspSymbolKind(lspKind: LspSymbolKind?): SymbolKind {
         return when (lspKind) {
             LspSymbolKind.Class -> SymbolKind.CLASS
@@ -325,16 +426,10 @@ class SwiftLanguageAdapter : LanguageAdapter {
     /**
      * Convert LSP Location to LocationInfo.
      * LSP returns 0-based; we keep 0-based here.
-     * McpToolExecutor.toOneBased() handles the conversion to 1-based for the MCP API.
+     * McpToolExecutor.toOneBased() adds +1 later.
      */
-    private fun locationToLocationInfo(location: Location): LocationInfo {
-        val uri = location.uri
-        val filePath = if (uri.startsWith("file://")) {
-            uri.removePrefix("file://")
-        } else {
-            uri
-        }
-
+    private fun locationToLocationInfo(location: Location, client: CSharpLspClient): LocationInfo {
+        val filePath = client.uriToPath(location.uri)
         return LocationInfo(
             filePath = filePath,
             line = location.range.start.line,           // 0-based
@@ -344,34 +439,30 @@ class SwiftLanguageAdapter : LanguageAdapter {
         )
     }
 
-    /**
-     * Convert LSP SymbolInformation to our SymbolInfo
-     */
-    private fun symbolInfoToSymbolInfo(lspSymbol: SymbolInformation): SymbolInfo {
+    private fun symbolInfoFromLsp(lspSymbol: SymbolInformation): SymbolInfo {
+        val path = uriToPathStatic(lspSymbol.location.uri)
         return SymbolInfo(
             name = lspSymbol.name,
             kind = mapLspSymbolKind(lspSymbol.kind),
             language = languageId,
             qualifiedName = lspSymbol.containerName?.let { "$it.${lspSymbol.name}" },
-            location = locationToLocationInfo(lspSymbol.location)
+            location = LocationInfo(
+                filePath = path,
+                line = lspSymbol.location.range.start.line,
+                column = lspSymbol.location.range.start.character,
+                endLine = lspSymbol.location.range.end.line,
+                endColumn = lspSymbol.location.range.end.character
+            )
         )
     }
 
-    /**
-     * Convert LSP WorkspaceSymbol to our SymbolInfo
-     */
-    private fun workspaceSymbolToSymbolInfo(lspSymbol: WorkspaceSymbol): SymbolInfo {
+    private fun workspaceSymbolToSymbolInfo(lspSymbol: WorkspaceSymbol, client: CSharpLspClient): SymbolInfo {
         val location = when {
-            lspSymbol.location.isLeft -> locationToLocationInfo(lspSymbol.location.left)
+            lspSymbol.location.isLeft -> locationToLocationInfo(lspSymbol.location.left, client)
             lspSymbol.location.isRight -> {
                 val wsLocation = lspSymbol.location.right
-                val uri = wsLocation.uri
-                val filePath = if (uri.startsWith("file://")) uri.removePrefix("file://") else uri
-                LocationInfo(
-                    filePath = filePath,
-                    line = 0,
-                    column = 0
-                )
+                val filePath = client.uriToPath(wsLocation.uri)
+                LocationInfo(filePath = filePath, line = 0, column = 0)
             }
             else -> null
         }
@@ -385,9 +476,6 @@ class SwiftLanguageAdapter : LanguageAdapter {
         )
     }
 
-    /**
-     * Convert LSP DocumentSymbol to our SymbolNode (hierarchical)
-     */
     private fun convertDocumentSymbol(symbol: DocumentSymbol, filePath: String): SymbolNode {
         val symbolInfo = SymbolInfo(
             name = symbol.name,
@@ -412,40 +500,34 @@ class SwiftLanguageAdapter : LanguageAdapter {
         )
 
         val children = symbol.children?.map { convertDocumentSymbol(it, filePath) } ?: emptyList()
-
         return SymbolNode(symbol = symbolInfo, children = children)
     }
 
-    /**
-     * Convert LSP SymbolInformation to SymbolNode (flat)
-     */
-    private fun convertSymbolInformation(symbol: SymbolInformation, filePath: String): SymbolNode {
+    private fun convertSymbolInformation(symbol: SymbolInformation, client: CSharpLspClient): SymbolNode {
+        val filePath = client.uriToPath(symbol.location.uri)
         return SymbolNode(
-            symbol = symbolInfoToSymbolInfo(symbol),
+            symbol = SymbolInfo(
+                name = symbol.name,
+                kind = mapLspSymbolKind(symbol.kind),
+                language = languageId,
+                qualifiedName = symbol.containerName?.let { "$it.${symbol.name}" },
+                location = LocationInfo(
+                    filePath = filePath,
+                    line = symbol.location.range.start.line,
+                    column = symbol.location.range.start.character,
+                    endLine = symbol.location.range.end.line,
+                    endColumn = symbol.location.range.end.character
+                )
+            ),
             children = emptyList()
         )
     }
 
-    /**
-     * Extract module name from file path
-     */
-    private fun extractModuleName(filePath: String): String? {
-        return File(filePath).nameWithoutExtension
-    }
-
-    /**
-     * Extract documentation from hover response
-     */
     private fun extractDocumentation(hover: org.eclipse.lsp4j.Hover?): String? {
         if (hover == null) return null
-
         return when {
-            hover.contents.isRight -> {
-                // MarkupContent
-                hover.contents.right.value
-            }
+            hover.contents.isRight -> hover.contents.right.value
             hover.contents.isLeft -> {
-                // List of MarkedString or String
                 hover.contents.left.joinToString("\n") { markedString ->
                     when {
                         markedString.isLeft -> markedString.left
@@ -458,18 +540,13 @@ class SwiftLanguageAdapter : LanguageAdapter {
         }
     }
 
-    /**
-     * Extract symbol name from documentation or file content
-     */
     private fun extractSymbolName(documentation: String?, project: Project, filePath: String, offset: Int): String? {
-        // Try to extract from documentation
         documentation?.let { doc ->
-            // Swift docs often show: "func name(...)", "class Name", "struct Name"
             val patterns = listOf(
-                Regex("""(?:func|init)\s+(\w+)"""),
-                Regex("""(?:class|struct|enum|protocol|extension)\s+(\w+)"""),
-                Regex("""(?:var|let)\s+(\w+)"""),
-                Regex("""(\w+)\s*\(""")  // Function call pattern
+                Regex("""(?:class|struct|enum|interface|record)\s+(\w+)"""),
+                Regex("""(?:void|int|string|bool|var|object|dynamic)\s+(\w+)\s*\("""),
+                Regex("""(\w+)\s*\("""),
+                Regex("""(?:public|private|protected|internal|static|readonly|const)\s+\S+\s+(\w+)""")
             )
             for (pattern in patterns) {
                 val match = pattern.find(doc)
@@ -477,7 +554,6 @@ class SwiftLanguageAdapter : LanguageAdapter {
             }
         }
 
-        // Fallback: read word at offset from file
         val virtualFile = LocalFileSystem.getInstance().findFileByPath(filePath) ?: return null
         val psiFile = PsiManager.getInstance(project).findFile(virtualFile) ?: return null
         val document = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return null
@@ -485,7 +561,6 @@ class SwiftLanguageAdapter : LanguageAdapter {
         val text = document.text
         if (offset >= text.length) return null
 
-        // Find word boundaries
         var start = offset
         var end = offset
         while (start > 0 && (text[start - 1].isLetterOrDigit() || text[start - 1] == '_')) start--
@@ -494,22 +569,17 @@ class SwiftLanguageAdapter : LanguageAdapter {
         return if (start < end) text.substring(start, end) else null
     }
 
-    /**
-     * Infer symbol kind from documentation content
-     */
     private fun inferSymbolKind(documentation: String?): SymbolKind {
         if (documentation == null) return SymbolKind.VARIABLE
-
         val doc = documentation.lowercase()
         return when {
-            doc.startsWith("class ") -> SymbolKind.CLASS
-            doc.startsWith("struct ") -> SymbolKind.CLASS
+            doc.startsWith("class ") || doc.startsWith("struct ") || doc.startsWith("record ") -> SymbolKind.CLASS
+            doc.startsWith("interface ") -> SymbolKind.INTERFACE
             doc.startsWith("enum ") -> SymbolKind.ENUM
-            doc.startsWith("protocol ") -> SymbolKind.INTERFACE
-            doc.startsWith("func ") || doc.startsWith("init") -> SymbolKind.FUNCTION
-            doc.startsWith("var ") || doc.startsWith("let ") -> SymbolKind.PROPERTY
-            doc.contains("->") -> SymbolKind.FUNCTION  // Has return type, likely a function
+            doc.startsWith("namespace ") -> SymbolKind.MODULE
+            doc.contains("(") && doc.contains(")") -> SymbolKind.METHOD
             else -> SymbolKind.VARIABLE
         }
     }
+
 }

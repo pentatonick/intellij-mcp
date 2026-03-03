@@ -50,7 +50,7 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 
-    // LSP4J for Swift language support (via SourceKit-LSP)
+    // LSP4J for Swift (SourceKit-LSP) and C# (csharp-ls/OmniSharp) language support
     implementation("org.eclipse.lsp4j:org.eclipse.lsp4j:0.21.2")
     implementation("org.eclipse.lsp4j:org.eclipse.lsp4j.jsonrpc:0.21.2")
 }
@@ -98,6 +98,7 @@ intellijPlatform {
                 <li>Kotlin (requires Kotlin plugin)</li>
                 <li>Rust (requires Rust plugin)</li>
                 <li>Swift (macOS only, requires Xcode or Swift toolchain)</li>
+                <li>C# (requires csharp-ls or OmniSharp language server)</li>
             </ul>
 
             <p>Source code: <a href="https://github.com/jiayun/intellij-mcp">GitHub</a></p>
@@ -114,6 +115,14 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h3>1.5.0</h3>
+            <ul>
+                <li><b>New:</b> C# language support via LSP - find symbols, references, file structure, and type hierarchy</li>
+                <li>Requires csharp-ls (<code>dotnet tool install --global csharp-ls</code>) or OmniSharp</li>
+                <li>Cross-platform support (Windows, macOS, Linux)</li>
+                <li><b>Fix:</b> Swift line/column numbers off by one in find_references and get_symbol_info</li>
+            </ul>
+
             <h3>1.4.0</h3>
             <ul>
                 <li><b>New:</b> Rust language support - find symbols, references, and file structure in Rust code</li>
@@ -173,6 +182,12 @@ intellijPlatformTesting {
         // Run with RustRover (for Rust testing)
         register("runRustRover") {
             type = IntelliJPlatformType.RustRover
+            version = "2025.3.1"
+        }
+
+        // Run with Rider (for C# testing)
+        register("runRider") {
+            type = IntelliJPlatformType.Rider
             version = "2025.3.1"
         }
     }

@@ -38,6 +38,7 @@ Output: `core/build/distributions/intellij-mcp-x.x.x.zip`
 - Kotlin adapter in `kotlin/KotlinLanguageAdapter.kt` uses Kotlin PSI APIs (KtClass, KtNamedFunction, etc.)
 - JavaScript/TypeScript adapter in `javascript/JavaScriptLanguageAdapter.kt` uses JavaScript PSI APIs (JSClass, JSFunction, JSVariable)
 - Vue.js adapter in `vue/VueLanguageAdapter.kt` handles `.vue` Single File Components
+- C# adapter in `csharp/CSharpLanguageAdapter.kt` uses external LSP (csharp-ls/OmniSharp), similar to Swift adapter
 
 **MCP Server** (`mcp/McpServer.kt`)
 - Ktor Netty server exposing JSON-RPC 2.0 endpoints
@@ -64,6 +65,7 @@ Output: `core/build/distributions/intellij-mcp-x.x.x.zip`
 - Kotlin support requires Kotlin plugin (bundled in IntelliJ IDEA)
 - JavaScript/TypeScript support requires JavaScript plugin (bundled in WebStorm, IntelliJ IDEA Ultimate)
 - Vue.js support requires Vue.js plugin (bundled in WebStorm, available in IntelliJ IDEA Ultimate)
+- C# support requires external LSP server: csharp-ls (`dotnet tool install --global csharp-ls`) or OmniSharp
 - IDE must be running with project open for MCP tools to work
 - Index must be ready (not in "dumb mode") for symbol operations
 
@@ -111,7 +113,15 @@ When updating the IntelliJ Platform version:
 
 ## Adding Language Support
 
+### PSI-based (requires IDE plugin)
 1. Create adapter class implementing `LanguageAdapter` in `<lang>/<Lang>LanguageAdapter.kt`
 2. Register in new config file (e.g., `<lang>-support.xml`)
 3. Add optional dependency in `plugin.xml` with config-file attribute
 4. Add required PSI dependencies in `build.gradle.kts`
+
+### LSP-based (external language server, e.g., Swift, C#)
+1. Create `<Lang>LanguageClient.kt` — LSP callback receiver
+2. Create `<Lang>LspClient.kt` — LSP process/lifecycle management, binary discovery
+3. Create `<Lang>LanguageAdapter.kt` — implements `LanguageAdapter`, delegates to LSP client
+4. Register directly in `plugin.xml` (no optional dependency needed, runtime detection in code)
+5. **Coordinates**: Return 0-based line/column from adapter; `McpToolExecutor.toOneBased()` handles +1

@@ -26,6 +26,7 @@
             <li>Kotlin (requires Kotlin plugin)</li>
             <li>Rust (requires Rust plugin)</li>
             <li>Swift (macOS only, requires Xcode or Swift toolchain)</li>
+            <li>C# (requires csharp-ls or OmniSharp language server, SDK-style projects only)</li>
         </ul>
     ]]></description>
 
@@ -67,9 +68,12 @@
     </extensions>
 
     <!-- Swift language adapter - no optional dependency needed, platform detection in code -->
+    <!-- C# language adapter - uses external LSP (csharp-ls / OmniSharp), no IDE plugin dependency -->
     <extensions defaultExtensionNs="info.jiayun.intellij-mcp">
         <languageAdapter
             implementation="info.jiayun.intellijmcp.swift.SwiftLanguageAdapter"/>
+        <languageAdapter
+            implementation="info.jiayun.intellijmcp.csharp.CSharpLanguageAdapter"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.intellij">
