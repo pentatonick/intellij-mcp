@@ -38,6 +38,7 @@ Output: `core/build/distributions/intellij-mcp-x.x.x.zip`
 - Kotlin adapter in `kotlin/KotlinLanguageAdapter.kt` uses Kotlin PSI APIs (KtClass, KtNamedFunction, etc.)
 - JavaScript/TypeScript adapter in `javascript/JavaScriptLanguageAdapter.kt` uses JavaScript PSI APIs (JSClass, JSFunction, JSVariable)
 - Vue.js adapter in `vue/VueLanguageAdapter.kt` handles `.vue` Single File Components
+- Go adapter in `go/GoLanguageAdapter.kt` uses Go PSI APIs (GoTypeSpec, GoFunctionDeclaration, etc.)
 - C# adapter in `csharp/CSharpLanguageAdapter.kt` uses external LSP (csharp-ls/OmniSharp), similar to Swift adapter
 
 **MCP Server** (`mcp/McpServer.kt`)
@@ -65,6 +66,7 @@ Output: `core/build/distributions/intellij-mcp-x.x.x.zip`
 - Kotlin support requires Kotlin plugin (bundled in IntelliJ IDEA)
 - JavaScript/TypeScript support requires JavaScript plugin (bundled in WebStorm, IntelliJ IDEA Ultimate)
 - Vue.js support requires Vue.js plugin (bundled in WebStorm, available in IntelliJ IDEA Ultimate)
+- Go support requires Go plugin (bundled in GoLand, available in IntelliJ IDEA Ultimate)
 - C# support requires external LSP server: csharp-ls (`dotnet tool install --global csharp-ls`) or OmniSharp
 - IDE must be running with project open for MCP tools to work
 - Index must be ready (not in "dumb mode") for symbol operations

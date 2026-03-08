@@ -25,6 +25,8 @@ dependencies {
         plugin("com.jetbrains.php:253.29346.138")
         // Rust plugin from marketplace (RustRover features for IntelliJ IDEA)
         plugin("com.jetbrains.rust:253.29346.139")
+        // Go plugin from marketplace (GoLand features for IntelliJ IDEA)
+        plugin("org.jetbrains.plugins.go:253.29346.240")
 
         pluginVerifier()
         zipSigner()
@@ -97,6 +99,7 @@ intellijPlatform {
                 <li>Java (requires Java plugin)</li>
                 <li>Kotlin (requires Kotlin plugin)</li>
                 <li>Rust (requires Rust plugin)</li>
+                <li>Go (requires Go plugin)</li>
                 <li>Swift (macOS only, requires Xcode or Swift toolchain)</li>
                 <li>C# (requires csharp-ls or OmniSharp language server)</li>
             </ul>
@@ -115,6 +118,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h3>1.6.0</h3>
+            <ul>
+                <li><b>New:</b> Go language support - find symbols, references, and file structure in Go code</li>
+                <li>Requires Go plugin (bundled in GoLand, available in IntelliJ IDEA Ultimate)</li>
+            </ul>
+
             <h3>1.5.0</h3>
             <ul>
                 <li><b>New:</b> C# language support via LSP - find symbols, references, file structure, and type hierarchy</li>
@@ -182,6 +191,12 @@ intellijPlatformTesting {
         // Run with RustRover (for Rust testing)
         register("runRustRover") {
             type = IntelliJPlatformType.RustRover
+            version = "2025.3.1"
+        }
+
+        // Run with GoLand (for Go testing)
+        register("runGoLand") {
+            type = IntelliJPlatformType.GoLand
             version = "2025.3.1"
         }
 

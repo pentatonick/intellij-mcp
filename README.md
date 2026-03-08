@@ -21,6 +21,7 @@ Expose JetBrains IDE code analysis capabilities via [MCP (Model Context Protocol
 | Java | ✅ Supported | `.java` |
 | Kotlin | ✅ Supported | `.kt`, `.kts` |
 | Rust | ✅ Supported | `.rs` |
+| Go | ✅ Supported | `.go` |
 | Swift | ✅ Supported | `.swift` |
 | C# | ✅ Supported | `.cs` |
 
@@ -34,6 +35,7 @@ Expose JetBrains IDE code analysis capabilities via [MCP (Model Context Protocol
 - For Java support: Java plugin installed (bundled in IntelliJ IDEA)
 - For Kotlin support: Kotlin plugin installed (bundled in IntelliJ IDEA)
 - For Rust support: Rust plugin installed (bundled in RustRover, available in IntelliJ IDEA Ultimate/CLion)
+- For Go support: Go plugin installed (bundled in GoLand, available in IntelliJ IDEA Ultimate)
 - For Swift support: **macOS only** - requires Xcode or Swift toolchain with SourceKit-LSP
 - For C# support: requires [csharp-ls](https://github.com/razzmatazz/csharp-language-server) or [OmniSharp](https://github.com/OmniSharp/omnisharp-roslyn)
 
@@ -212,6 +214,9 @@ dotnet tool install --global csharp-ls
 
 # RustRover (for Rust testing)
 ./gradlew :core:runRustRover
+
+# GoLand (for Go testing)
+./gradlew :core:runGoLand
 
 # Rider (for C# testing)
 ./gradlew :core:runRider

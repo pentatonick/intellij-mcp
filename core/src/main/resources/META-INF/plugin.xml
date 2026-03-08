@@ -25,6 +25,7 @@
             <li>Java (requires Java plugin)</li>
             <li>Kotlin (requires Kotlin plugin)</li>
             <li>Rust (requires Rust plugin)</li>
+            <li>Go (requires Go plugin)</li>
             <li>Swift (macOS only, requires Xcode or Swift toolchain)</li>
             <li>C# (requires csharp-ls or OmniSharp language server, SDK-style projects only)</li>
         </ul>
@@ -53,6 +54,9 @@
 
     <!-- Optional Rust support - enabled when Rust plugin is installed -->
     <depends optional="true" config-file="rust-support.xml">com.jetbrains.rust</depends>
+
+    <!-- Optional Go support - enabled when Go plugin is installed -->
+    <depends optional="true" config-file="go-support.xml">org.jetbrains.plugins.go</depends>
 
     <!-- Extension Point: Let language modules register adapters -->
     <extensionPoints>
